@@ -1,0 +1,14 @@
+# Core framework
+Django>=6,<7
+
+# API
+djangorestframework
+djangorestframework-simplejwt
+django-cors-headers
+
+# Database driver for PostgreSQL (Django backend: django.db.backends.postgresql)
+psycopg[binary]
+
+# Optional: required only if you set REDIS_URL to enable Django's RedisCache backend
+redis
+
