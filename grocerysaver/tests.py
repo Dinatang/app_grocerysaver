@@ -1,11 +1,16 @@
 """Tests de integracion para auth, catalogo, cache, DataLoader y jobs."""
 
+import os
+import shutil
+import tempfile
 from datetime import timedelta
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import connection
+from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rest_framework import status
@@ -17,6 +22,7 @@ from .models import (
     Cart,
     CartItem,
     Category,
+    DeviceSensorReading,
     EmailVerificationToken,
     NotificationPreference,
     Offer,
@@ -849,6 +855,7 @@ class BackgroundJobEndpointTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
         self.assertEqual(response.data['job']['status'], 'queued')
+        self.assertEqual(response.data['job']['payload']['format'], 'csv')
         self.assertEqual(BackgroundJob.objects.count(), 1)
 
     def test_job_detail_reports_completed_result(self):
@@ -864,3 +871,157 @@ class BackgroundJobEndpointTests(APITestCase):
         self.assertTrue(detail_response.data['is_finished'])
         self.assertEqual(detail_response.data['job']['status'], 'completed')
         self.assertIn('file_name', detail_response.data['job']['result'])
+        self.assertEqual(detail_response.data['job']['result']['file_format'], 'csv')
+
+    def test_enqueue_export_job_accepts_txt_format(self):
+        response = self.client.post(
+            '/api/jobs/export-products/',
+            {'format': 'txt', 'search': 'Papas'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
+        self.assertEqual(response.data['job']['payload']['format'], 'txt')
+
+    def test_job_detail_reports_completed_pdf_result(self):
+        enqueue_response = self.client.post(
+            '/api/jobs/export-products/',
+            {'format': 'pdf'},
+            format='json',
+        )
+        job_id = enqueue_response.data['job']['job_id']
+
+        processed_job = process_next_job()
+        self.assertIsNotNone(processed_job)
+        self.assertEqual(processed_job.status, 'completed')
+        self.assertEqual(processed_job.result['file_format'], 'pdf')
+        self.assertTrue(processed_job.result['file_name'].endswith('.pdf'))
+
+        detail_response = self.client.get(f'/api/jobs/{job_id}/')
+        self.assertEqual(detail_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(detail_response.data['job']['result']['file_format'], 'pdf')
+        self.assertTrue(detail_response.data['job']['result_url'].endswith('.pdf'))
+
+
+class DeviceSensorEndpointTests(APITestCase):
+    """Verifica el endpoint de captura de sensores del dispositivo."""
+
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username='sensor.user',
+            email='sensor@example.com',
+            password='TestPass123!@#',
+            is_active=True,
+        )
+
+    def test_create_device_sensor_reading_requires_authentication(self):
+        response = self.client.post(
+            '/api/device-sensors/',
+            {
+                'accelerometer': {'x': 0.12, 'y': -0.03, 'z': 9.81},
+                'gyroscope': {'x': 0.01, 'y': 0.00, 'z': -0.02},
+                'is_shaking': False,
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_create_device_sensor_reading_persists_payload(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.post(
+            '/api/device-sensors/',
+            {
+                'accelerometer': {'x': 0.12, 'y': -0.03, 'z': 9.81},
+                'gyroscope': {'x': 0.01, 'y': 0.00, 'z': -0.02},
+                'is_shaking': True,
+                'captured_at': '2026-03-13T15:30:00Z',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(DeviceSensorReading.objects.count(), 1)
+
+        reading = DeviceSensorReading.objects.get()
+        self.assertEqual(reading.user, self.user)
+        self.assertTrue(reading.is_shaking)
+        self.assertEqual(response.data['sensor_reading']['accelerometer']['x'], 0.12)
+        self.assertEqual(response.data['sensor_reading']['gyroscope']['z'], -0.02)
+        self.assertEqual(response.data['sensor_reading']['user_id'], self.user.id)
+
+    def test_create_device_sensor_reading_rejects_missing_axes(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.post(
+            '/api/device-sensors/',
+            {
+                'accelerometer': {'x': 0.12, 'y': -0.03},
+                'gyroscope': {'x': 0.01, 'y': 0.00, 'z': -0.02},
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('accelerometer', response.data)
+
+
+class ProfileAvatarEndpointTests(APITestCase):
+    """Verifica subida y eliminacion de foto de perfil."""
+
+    def setUp(self):
+        media_base_dir = os.path.join(os.getcwd(), 'media')
+        os.makedirs(media_base_dir, exist_ok=True)
+        self.temp_media_root = tempfile.mkdtemp(dir=media_base_dir)
+        self.override = override_settings(MEDIA_ROOT=self.temp_media_root)
+        self.override.enable()
+
+        self.user = get_user_model().objects.create_user(
+            username='avatar.user',
+            email='avatar@example.com',
+            password='TestPass123!@#',
+            is_active=True,
+        )
+        UserProfile.objects.create(
+            user=self.user,
+            role=None,
+            address='Centro',
+            birth_date='1999-01-01',
+        )
+        self.client.force_authenticate(user=self.user)
+
+    def tearDown(self):
+        self.override.disable()
+        shutil.rmtree(self.temp_media_root, ignore_errors=True)
+
+    def test_patch_uploads_avatar_and_returns_user_url(self):
+        avatar = SimpleUploadedFile('avatar.jpg', b'fake-image-content', content_type='image/jpeg')
+
+        with patch(
+            'django.core.files.storage.filesystem.FileSystemStorage.save',
+            return_value='avatars/user_1/test-avatar.jpg',
+        ):
+            response = self.client.patch(
+                '/api/auth/me/avatar/',
+                {'avatar': avatar},
+                format='multipart',
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.user.refresh_from_db()
+        self.assertTrue(bool(self.user.profile.avatar))
+        self.assertIn('/media/avatars/', response.data['user']['avatar'])
+
+    def test_delete_removes_avatar(self):
+        self.user.profile.avatar = 'avatars/user_1/test-avatar.jpg'
+        self.user.profile.save(update_fields=['avatar'])
+
+        with patch('django.core.files.storage.filesystem.FileSystemStorage.delete') as delete_mock:
+            response = self.client.delete('/api/auth/me/avatar/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        delete_mock.assert_called_once()
+        self.user.refresh_from_db()
+        self.assertFalse(bool(self.user.profile.avatar))
+        self.assertIsNone(response.data['user']['avatar'])

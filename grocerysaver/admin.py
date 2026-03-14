@@ -138,12 +138,22 @@ class UserProfileInline(admin.StackedInline):
     fk_name = 'user'
     can_delete = False
     max_num = 1
-    fields = ('role', 'address', 'birth_date')
+    fields = ('role', 'address', 'birth_date', 'avatar', 'avatar_preview')
+    readonly_fields = ('avatar_preview',)
 
     def get_extra(self, request, obj=None, **kwargs):
         if obj is not None and hasattr(obj, 'profile'):
             return 0
         return 1
+
+    @admin.display(description='Foto actual')
+    def avatar_preview(self, obj):
+        if not obj or not obj.avatar:
+            return '-'
+        return format_html(
+            '<img src="{}" style="height:56px; width:56px; object-fit:cover; border-radius:50%; border:1px solid #d1d5db;" />',
+            obj.avatar.url,
+        )
 
 
 @admin.register(User)
@@ -151,6 +161,7 @@ class CustomUserAdmin(UserAdmin):
     """Admin personalizado del usuario con datos de perfil integrados."""
 
     list_display = (
+        'avatar_preview',
         'username',
         'email',
         'first_name',
@@ -183,6 +194,16 @@ class CustomUserAdmin(UserAdmin):
     def birth_date(self, obj):
         profile = getattr(obj, 'profile', None)
         return profile.birth_date if profile else None
+
+    @admin.display(description='Foto')
+    def avatar_preview(self, obj):
+        profile = getattr(obj, 'profile', None)
+        if not profile or not profile.avatar:
+            return '-'
+        return format_html(
+            '<img src="{}" style="height:40px; width:40px; object-fit:cover; border-radius:50%; border:1px solid #d1d5db;" />',
+            profile.avatar.url,
+        )
 
     @admin.display(description='Actualizar')
     def actualizar_datos(self, obj):
@@ -391,8 +412,19 @@ class EmailVerificationTokenAdmin(admin.ModelAdmin):
 class UserProfileAdmin(admin.ModelAdmin):
     """Admin del perfil extendido del usuario."""
 
-    list_display = ('user', 'role', 'birth_date', 'address', 'created_at', 'updated_at')
+    list_display = ('avatar_preview', 'user', 'role', 'birth_date', 'address', 'created_at', 'updated_at')
     search_fields = ('user__email', 'user__username', 'role__name', 'address')
+    fields = ('user', 'role', 'address', 'birth_date', 'avatar', 'avatar_preview', 'created_at', 'updated_at')
+    readonly_fields = ('avatar_preview', 'created_at', 'updated_at')
+
+    @admin.display(description='Foto')
+    def avatar_preview(self, obj):
+        if not obj.avatar:
+            return '-'
+        return format_html(
+            '<img src="{}" style="height:48px; width:48px; object-fit:cover; border-radius:50%; border:1px solid #d1d5db;" />',
+            obj.avatar.url,
+        )
 
 
 @admin.register(Address)

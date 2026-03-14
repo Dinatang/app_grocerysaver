@@ -17,6 +17,15 @@ class SocialProvider(models.TextChoices):
     APPLE = 'apple', 'Apple'
 
 
+def user_avatar_upload_to(instance, filename):
+    """Genera una ruta estable por usuario con nombre unico para el avatar."""
+
+    extension = ''
+    if '.' in filename:
+        extension = f".{filename.rsplit('.', 1)[-1].lower()}"
+    return f'avatars/user_{instance.user_id}/{uuid.uuid4().hex}{extension}'
+
+
 class RoleChangeRequestStatus(models.TextChoices):
     """Estados posibles de una solicitud de cambio de rol."""
 
@@ -266,6 +275,12 @@ class UserProfile(models.Model):
     )
     address = models.CharField(max_length=255)
     birth_date = models.DateField()
+    avatar = models.FileField(
+        upload_to=user_avatar_upload_to,
+        blank=True,
+        null=True,
+        validators=[FileExtensionValidator(allowed_extensions=['jpg', 'jpeg', 'png', 'webp'])],
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -472,3 +487,31 @@ class BackgroundJob(models.Model):
 
     def __str__(self):
         return f'BackgroundJob(job_id={self.job_id}, status={self.status})'
+
+
+class DeviceSensorReading(models.Model):
+    """Lectura puntual de sensores del dispositivo enviada por la app movil."""
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='device_sensor_readings',
+    )
+    accelerometer_x = models.FloatField()
+    accelerometer_y = models.FloatField()
+    accelerometer_z = models.FloatField()
+    gyroscope_x = models.FloatField()
+    gyroscope_y = models.FloatField()
+    gyroscope_z = models.FloatField()
+    is_shaking = models.BooleanField(default=False)
+    captured_at = models.DateTimeField(default=timezone.now)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-captured_at', '-id']
+        indexes = [
+            models.Index(fields=['user', '-captured_at']),
+        ]
+
+    def __str__(self):
+        return f'DeviceSensorReading(user={self.user_id}, captured_at={self.captured_at.isoformat()})'

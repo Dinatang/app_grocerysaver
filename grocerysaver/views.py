@@ -5,6 +5,7 @@ from django.contrib.auth import get_user_model
 from django.db.models import Prefetch
 from django.utils import timezone
 from rest_framework import generics, permissions, status
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
@@ -49,6 +50,7 @@ from .models import (
     RoleChangeRequest,
     SocialAccount,
     Store,
+    UserProfile,
 )
 from .serializers import (
     AddressSerializer,
@@ -58,10 +60,12 @@ from .serializers import (
     CartItemUpdateSerializer,
     CartSerializer,
     CategorySerializer,
+    DeviceSensorReadingSerializer,
     LoginSerializer,
     LogoutSerializer,
     NotificationPreferenceSerializer,
     OfferSerializer,
+    ProfileAvatarSerializer,
     ProductExportJobCreateSerializer,
     ProductCodeSerializer,
     ProductPriceSerializer,
@@ -101,10 +105,15 @@ def get_request_base_url(request):
     return request.build_absolute_uri('/')
 
 
-def build_user_response(user):
+def build_user_response(user, request=None):
     """Construye un payload consistente de usuario autenticado."""
     profile = getattr(user, 'profile', None)
     role_name = profile.role.name if profile and profile.role else None
+    avatar_url = None
+    if profile and profile.avatar:
+        avatar_url = profile.avatar.url
+        if request is not None:
+            avatar_url = request.build_absolute_uri(avatar_url)
     return {
         'id': user.id,
         'username': user.username,
@@ -116,6 +125,7 @@ def build_user_response(user):
         'role': role_name,
         'address': profile.address if profile else None,
         'birth_date': str(profile.birth_date) if profile and profile.birth_date else None,
+        'avatar': avatar_url,
     }
 
 
@@ -1117,7 +1127,7 @@ class ProductPriceComparisonView(APIView):
 
 
 class ProductExportJobCreateView(APIView):
-    """Encola un job asincrono para exportar productos a CSV."""
+    """Encola un job asincrono para exportar productos en varios formatos."""
 
     permission_classes = [permissions.IsAuthenticated]
 
@@ -1127,6 +1137,7 @@ class ProductExportJobCreateView(APIView):
 
         job = enqueue_export_products_job(
             created_by=request.user,
+            file_format=serializer.validated_data.get('format', 'csv'),
             category_id=serializer.validated_data.get('category_id'),
             search=serializer.validated_data.get('search', ''),
         )
@@ -1138,6 +1149,24 @@ class ProductExportJobCreateView(APIView):
                 'job': response_serializer.data,
             },
             status=status.HTTP_202_ACCEPTED,
+        )
+
+
+class DeviceSensorReadingCreateView(APIView):
+    """Recibe y persiste una lectura de sensores del dispositivo autenticado."""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        serializer = DeviceSensorReadingSerializer(data=request.data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        reading = serializer.save()
+        return Response(
+            {
+                'detail': 'Lectura de sensores registrada.',
+                'sensor_reading': DeviceSensorReadingSerializer(reading).data,
+            },
+            status=status.HTTP_201_CREATED,
         )
 
 
@@ -1199,7 +1228,7 @@ class VerifyEmailView(APIView):
             {
                 'message': 'Correo verificado correctamente.',
                 'tokens': issue_jwt_pair(user),
-                'user': build_user_response(user),
+                'user': build_user_response(user, request=request),
             }
         )
 
@@ -1218,7 +1247,7 @@ class LoginView(APIView):
             {
                 'message': 'Inicio de sesion exitoso.',
                 'tokens': issue_jwt_pair(user),
-                'user': build_user_response(user),
+                'user': build_user_response(user, request=request),
             }
         )
 
@@ -1229,7 +1258,50 @@ class MeView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        return Response({'user': build_user_response(request.user)})
+        return Response({'user': build_user_response(request.user, request=request)})
+
+
+class ProfileAvatarView(APIView):
+    """Permite subir, reemplazar y eliminar el avatar del usuario autenticado."""
+
+    permission_classes = [permissions.IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def _get_profile(self, request):
+        profile = getattr(request.user, 'profile', None)
+        if profile is None:
+            profile = UserProfile.objects.create(
+                user=request.user,
+                address='',
+                birth_date=timezone.localdate(),
+            )
+        return profile
+
+    def patch(self, request):
+        profile = self._get_profile(request)
+        serializer = ProfileAvatarSerializer(profile, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(
+            {
+                'message': 'Foto de perfil actualizada.',
+                'user': build_user_response(request.user, request=request),
+            }
+        )
+
+    def delete(self, request):
+        profile = self._get_profile(request)
+        if profile.avatar:
+            profile.avatar.delete(save=False)
+            profile.avatar = None
+            profile.save(update_fields=['avatar', 'updated_at'])
+
+        return Response(
+            {
+                'message': 'Foto de perfil eliminada.',
+                'user': build_user_response(request.user, request=request),
+            }
+        )
 
 
 class LogoutView(APIView):
@@ -1260,7 +1332,7 @@ class ProtectedRouteView(APIView):
         return Response(
             {
                 'message': 'Ruta protegida accesible con token valido.',
-                'user': build_user_response(request.user),
+                'user': build_user_response(request.user, request=request),
             }
         )
 
@@ -1325,6 +1397,6 @@ class SocialLoginView(APIView):
                 'message': 'Autenticacion social exitosa.',
                 'created': created,
                 'tokens': issue_jwt_pair(user),
-                'user': build_user_response(user),
+                'user': build_user_response(user, request=request),
             }
         )

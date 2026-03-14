@@ -15,6 +15,7 @@ from .models import (
     Cart,
     CartItem,
     Category,
+    DeviceSensorReading,
     NotificationPreference,
     Offer,
     Product,
@@ -460,8 +461,9 @@ class ProductCodeSerializer(serializers.ModelSerializer):
 
 
 class ProductExportJobCreateSerializer(serializers.Serializer):
-    """Valida filtros opcionales para exportar productos a CSV."""
+    """Valida filtros opcionales y formato para exportar productos."""
 
+    format = serializers.ChoiceField(choices=['txt', 'csv', 'pdf'], required=False, default='csv')
     category_id = serializers.IntegerField(required=False)
     search = serializers.CharField(required=False, allow_blank=True, max_length=120)
 
@@ -653,3 +655,91 @@ class RoleChangeRequestCreateSerializer(serializers.Serializer):
             requested_role=validated_data['requested_role'],
             reason=validated_data.get('reason', ''),
         )
+
+
+class SensorVectorSerializer(serializers.Serializer):
+    """Valida un vector tridimensional de sensores."""
+
+    x = serializers.FloatField()
+    y = serializers.FloatField()
+    z = serializers.FloatField()
+
+
+class DeviceSensorReadingSerializer(serializers.ModelSerializer):
+    """Serializa lecturas de sensores del dispositivo para entrada y salida."""
+
+    accelerometer = SensorVectorSerializer(write_only=True)
+    gyroscope = SensorVectorSerializer(write_only=True)
+    user_id = serializers.IntegerField(source='user.id', read_only=True)
+
+    class Meta:
+        model = DeviceSensorReading
+        fields = [
+            'id',
+            'user_id',
+            'accelerometer',
+            'gyroscope',
+            'accelerometer_x',
+            'accelerometer_y',
+            'accelerometer_z',
+            'gyroscope_x',
+            'gyroscope_y',
+            'gyroscope_z',
+            'is_shaking',
+            'captured_at',
+            'created_at',
+        ]
+        read_only_fields = [
+            'id',
+            'user_id',
+            'accelerometer_x',
+            'accelerometer_y',
+            'accelerometer_z',
+            'gyroscope_x',
+            'gyroscope_y',
+            'gyroscope_z',
+            'created_at',
+        ]
+
+    def create(self, validated_data):
+        accelerometer = validated_data.pop('accelerometer')
+        gyroscope = validated_data.pop('gyroscope')
+
+        return DeviceSensorReading.objects.create(
+            user=self.context['request'].user,
+            accelerometer_x=accelerometer['x'],
+            accelerometer_y=accelerometer['y'],
+            accelerometer_z=accelerometer['z'],
+            gyroscope_x=gyroscope['x'],
+            gyroscope_y=gyroscope['y'],
+            gyroscope_z=gyroscope['z'],
+            **validated_data,
+        )
+
+    def to_representation(self, instance):
+        payload = super().to_representation(instance)
+        payload['accelerometer'] = {
+            'x': payload.pop('accelerometer_x'),
+            'y': payload.pop('accelerometer_y'),
+            'z': payload.pop('accelerometer_z'),
+        }
+        payload['gyroscope'] = {
+            'x': payload.pop('gyroscope_x'),
+            'y': payload.pop('gyroscope_y'),
+            'z': payload.pop('gyroscope_z'),
+        }
+        return payload
+
+
+class ProfileAvatarSerializer(serializers.ModelSerializer):
+    """Actualiza solo el archivo de avatar del perfil autenticado."""
+
+    class Meta:
+        model = UserProfile
+        fields = ['avatar']
+
+    def update(self, instance, validated_data):
+        new_avatar = validated_data.get('avatar')
+        if new_avatar is not None and instance.avatar:
+            instance.avatar.delete(save=False)
+        return super().update(instance, validated_data)
