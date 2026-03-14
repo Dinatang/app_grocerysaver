@@ -322,6 +322,59 @@ class NotificationPreference(models.Model):
         return f'NotificationPreference(user={self.user_id})'
 
 
+class Cart(models.Model):
+    """Carrito persistido asociado de forma unica a un usuario."""
+
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='cart',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-updated_at']
+
+    def __str__(self):
+        return f'Cart(user={self.user_id})'
+
+
+class CartItem(models.Model):
+    """Linea de carrito para un producto con cantidad y tienda seleccionada."""
+
+    cart = models.ForeignKey(
+        Cart,
+        on_delete=models.CASCADE,
+        related_name='items',
+    )
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.CASCADE,
+        related_name='cart_items',
+    )
+    store = models.ForeignKey(
+        Store,
+        on_delete=models.SET_NULL,
+        related_name='cart_items',
+        null=True,
+        blank=True,
+    )
+    quantity = models.PositiveIntegerField(default=1)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-updated_at']
+        constraints = [
+            models.UniqueConstraint(fields=['cart', 'product'], name='uniq_cart_item_per_product'),
+            models.CheckConstraint(condition=Q(quantity__gte=1), name='cart_item_quantity_gte_1'),
+        ]
+
+    def __str__(self):
+        return f'CartItem(cart={self.cart_id}, product={self.product_id}, quantity={self.quantity})'
+
+
 class Raffle(models.Model):
     """Rifa activa o historica ofrecida por la plataforma."""
 

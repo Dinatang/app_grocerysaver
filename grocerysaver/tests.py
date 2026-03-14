@@ -14,6 +14,8 @@ from rest_framework.test import APIRequestFactory, APITestCase
 from .models import (
     Address,
     BackgroundJob,
+    Cart,
+    CartItem,
     Category,
     EmailVerificationToken,
     NotificationPreference,
@@ -516,6 +518,150 @@ class ProfileMenuEndpointsTests(APITestCase):
             format='json',
         )
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+
+class CartEndpointTests(APITestCase):
+    """Pruebas del carrito persistido y sus lineas CRUD."""
+
+    def setUp(self):
+        cache.clear()
+        role, _ = Role.objects.get_or_create(name='cliente')
+        self.user = get_user_model().objects.create_user(
+            username='cart.user',
+            email='cart@example.com',
+            password='TestPass123!@#',
+            is_active=True,
+        )
+        UserProfile.objects.create(
+            user=self.user,
+            role=role,
+            address='Centro',
+            birth_date='1994-02-10',
+        )
+        self.client.force_authenticate(user=self.user)
+
+        self.category = Category.objects.create(name='Despensa Cart')
+        self.product = Product.objects.create(
+            category=self.category,
+            name='Arroz extra',
+            brand='Campos',
+            description='Saco 1kg',
+        )
+        self.other_product = Product.objects.create(
+            category=self.category,
+            name='Azucar morena',
+            brand='Dulce Vida',
+            description='Funda 1kg',
+        )
+        self.store_expensive = Store.objects.create(name='Super Cart')
+        self.store_best = Store.objects.create(name='Toti Cart')
+        ProductPrice.objects.create(product=self.product, store=self.store_expensive, price='1.50')
+        ProductPrice.objects.create(product=self.product, store=self.store_best, price='1.20')
+        ProductPrice.objects.create(product=self.other_product, store=self.store_best, price='0.95')
+
+    def test_get_cart_creates_empty_cart(self):
+        response = self.client.get('/api/cart/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['cart']['items'], [])
+        self.assertEqual(response.data['cart']['total_items'], 0)
+        self.assertEqual(response.data['cart']['subtotal'], '0.00')
+        self.assertTrue(Cart.objects.filter(user=self.user).exists())
+
+    def test_add_cart_item_uses_best_price_store(self):
+        response = self.client.post(
+            '/api/cart/items/',
+            {
+                'product_id': self.product.id,
+                'quantity': 2,
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data['item']['store']['name'], 'Toti Cart')
+        self.assertEqual(response.data['item']['unit_price'], '1.20')
+        self.assertEqual(response.data['cart']['total_items'], 2)
+        self.assertEqual(response.data['cart']['subtotal'], '2.40')
+
+    def test_add_same_product_merges_existing_item(self):
+        self.client.post(
+            '/api/cart/items/',
+            {
+                'product_id': self.product.id,
+                'quantity': 1,
+            },
+            format='json',
+        )
+
+        response = self.client.post(
+            '/api/cart/items/',
+            {
+                'product_id': self.product.id,
+                'quantity': 2,
+                'store_id': self.store_expensive.id,
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(CartItem.objects.count(), 1)
+        self.assertEqual(response.data['item']['quantity'], 3)
+        self.assertEqual(response.data['item']['store']['name'], 'Super Cart')
+        self.assertEqual(response.data['cart']['subtotal'], '4.50')
+
+    def test_patch_cart_item_updates_quantity_and_store(self):
+        create_response = self.client.post(
+            '/api/cart/items/',
+            {
+                'product_id': self.product.id,
+                'quantity': 1,
+            },
+            format='json',
+        )
+        item_id = create_response.data['item']['id']
+
+        response = self.client.patch(
+            f'/api/cart/items/{item_id}/',
+            {
+                'quantity': 4,
+                'store_id': self.store_expensive.id,
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['item']['quantity'], 4)
+        self.assertEqual(response.data['item']['store']['name'], 'Super Cart')
+        self.assertEqual(response.data['item']['line_total'], '6.00')
+        self.assertEqual(response.data['cart']['subtotal'], '6.00')
+
+    def test_delete_cart_item_and_clear_cart(self):
+        first_response = self.client.post(
+            '/api/cart/items/',
+            {
+                'product_id': self.product.id,
+                'quantity': 1,
+            },
+            format='json',
+        )
+        self.client.post(
+            '/api/cart/items/',
+            {
+                'product_id': self.other_product.id,
+                'quantity': 3,
+            },
+            format='json',
+        )
+
+        item_id = first_response.data['item']['id']
+        delete_response = self.client.delete(f'/api/cart/items/{item_id}/')
+        self.assertEqual(delete_response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(CartItem.objects.count(), 1)
+
+        clear_response = self.client.delete('/api/cart/')
+        self.assertEqual(clear_response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(CartItem.objects.count(), 0)
 
 
 class WeatherEndpointTests(APITestCase):

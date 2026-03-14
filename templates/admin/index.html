@@ -1,0 +1,92 @@
+{% extends "admin/base_site.html" %}
+{% load i18n static grocery_admin %}
+
+{% block extrahead %}
+{{ block.super }}
+<script defer src="{% static 'grocerysaver/admin/dashboard.js' %}"></script>
+{% endblock %}
+
+{% block content_title %}
+{% grocery_dashboard_data as dashboard %}
+<div class="grocery-dashboard__hero">
+    <div>
+        <p class="grocery-eyebrow">Panel ejecutivo</p>
+        <h1>Vista general de GrocerySaver</h1>
+        <p class="grocery-hero-copy">El backend ahora resume el estado del catalogo, ofertas, usuarios y carritos con metricas visuales.</p>
+    </div>
+    <div class="grocery-hero-actions">
+        <a href="/api/" class="button">Explorar API</a>
+        <a href="{% url 'admin:app_list' app_label='grocerysaver' %}" class="button button-secondary">Ir al modulo GrocerySaver</a>
+    </div>
+</div>
+{% endblock %}
+
+{% block content %}
+{% grocery_dashboard_data as dashboard %}
+{{ dashboard.charts|json_script:"grocery-dashboard-data" }}
+
+<div class="grocery-dashboard">
+    <section class="grocery-metric-grid">
+        {% for metric in dashboard.metrics %}
+        <article class="grocery-metric-card grocery-accent-{{ metric.accent }}">
+            <p class="grocery-metric-card__label">{{ metric.label }}</p>
+            <p class="grocery-metric-card__value">{{ metric.value }}</p>
+            <p class="grocery-metric-card__hint">{{ metric.hint }}</p>
+        </article>
+        {% endfor %}
+    </section>
+
+    <section class="grocery-chart-grid">
+        <article class="grocery-chart-card">
+            <header class="grocery-chart-card__header">
+                <div>
+                    <h2>{{ dashboard.charts.offers.title }}</h2>
+                    <p>{{ dashboard.charts.offers.subtitle }}</p>
+                </div>
+            </header>
+            <div class="grocery-chart-card__body grocery-chart-card__body-center">
+                <canvas id="offersChart" height="270"></canvas>
+            </div>
+        </article>
+
+        <article class="grocery-chart-card">
+            <header class="grocery-chart-card__header">
+                <div>
+                    <h2>{{ dashboard.charts.categories.title }}</h2>
+                    <p>{{ dashboard.charts.categories.subtitle }}</p>
+                </div>
+            </header>
+            <div class="grocery-chart-card__body">
+                <canvas id="categoriesChart" height="270"></canvas>
+            </div>
+        </article>
+    </section>
+
+    <section class="grocery-chart-grid grocery-chart-grid--wide">
+        <article class="grocery-chart-card">
+            <header class="grocery-chart-card__header">
+                <div>
+                    <h2>{{ dashboard.charts.activity.title }}</h2>
+                    <p>{{ dashboard.charts.activity.subtitle }}</p>
+                </div>
+            </header>
+            <div class="grocery-chart-card__body">
+                <canvas id="activityChart" height="280"></canvas>
+            </div>
+        </article>
+
+        <article class="grocery-chart-card">
+            <header class="grocery-chart-card__header">
+                <div>
+                    <h2>{{ dashboard.charts.stores.title }}</h2>
+                    <p>{{ dashboard.charts.stores.subtitle }}</p>
+                </div>
+            </header>
+            <div class="grocery-chart-card__body">
+                <canvas id="storesChart" height="280"></canvas>
+            </div>
+        </article>
+    </section>
+
+</div>
+{% endblock %}

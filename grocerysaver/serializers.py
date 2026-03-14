@@ -12,6 +12,8 @@ from .dataloaders import batch_load_product_qr_codes, get_request_loader
 from .models import (
     Address,
     BackgroundJob,
+    Cart,
+    CartItem,
     Category,
     NotificationPreference,
     Offer,
@@ -59,6 +61,22 @@ def collect_product_ids_for_batch(instance):
         product_ids.append(product_id)
 
     return product_ids
+
+
+def get_product_price_row(product, store_id=None):
+    """Resuelve el precio del producto para una tienda concreta o la mejor opcion."""
+    prices = list(product.prices.all())
+    if not prices:
+        return None
+
+    if store_id is None:
+        return prices[0]
+
+    for price_row in prices:
+        if price_row.store_id == store_id:
+            return price_row
+
+    return None
 
 
 class RegisterSerializer(serializers.Serializer):
@@ -217,6 +235,149 @@ class NotificationPreferenceSerializer(serializers.ModelSerializer):
         model = NotificationPreference
         fields = ['push_enabled', 'email_enabled', 'sms_enabled', 'updated_at']
         read_only_fields = ['updated_at']
+
+
+class CartItemSerializer(serializers.ModelSerializer):
+    """Representacion de lectura de una linea del carrito."""
+
+    product = serializers.SerializerMethodField()
+    store = StoreSerializer(read_only=True)
+    unit_price = serializers.SerializerMethodField()
+    line_total = serializers.SerializerMethodField()
+    has_price = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CartItem
+        fields = [
+            'id',
+            'product',
+            'store',
+            'quantity',
+            'unit_price',
+            'line_total',
+            'has_price',
+            'created_at',
+            'updated_at',
+        ]
+
+    def get_product(self, obj):
+        return ProductSerializer(
+            obj.product,
+            context=self.context,
+        ).data
+
+    def get_unit_price(self, obj):
+        price_row = get_product_price_row(obj.product, obj.store_id)
+        return str(price_row.price) if price_row is not None else None
+
+    def get_line_total(self, obj):
+        price_row = get_product_price_row(obj.product, obj.store_id)
+        if price_row is None:
+            return None
+        return str(price_row.price * obj.quantity)
+
+    def get_has_price(self, obj):
+        return get_product_price_row(obj.product, obj.store_id) is not None
+
+
+class CartSerializer(serializers.ModelSerializer):
+    """Representacion del carrito con items y totales agregados."""
+
+    items = serializers.SerializerMethodField()
+    total_items = serializers.SerializerMethodField()
+    distinct_products = serializers.SerializerMethodField()
+    subtotal = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Cart
+        fields = [
+            'id',
+            'items',
+            'total_items',
+            'distinct_products',
+            'subtotal',
+            'created_at',
+            'updated_at',
+        ]
+
+    def get_items(self, obj):
+        items = list(obj.items.all())
+        request = self.context.get('request')
+        qr_codes_by_product_id = get_request_loader(
+            request,
+            'product_qr_codes',
+            batch_load_product_qr_codes,
+        ).load_many([item.product_id for item in items])
+        return CartItemSerializer(
+            items,
+            many=True,
+            context={
+                'request': request,
+                'qr_codes_by_product_id': qr_codes_by_product_id,
+            },
+        ).data
+
+    def get_total_items(self, obj):
+        return sum(item.quantity for item in obj.items.all())
+
+    def get_distinct_products(self, obj):
+        return len(obj.items.all())
+
+    def get_subtotal(self, obj):
+        subtotal = Decimal('0.00')
+        for item in obj.items.all():
+            price_row = get_product_price_row(item.product, item.store_id)
+            if price_row is None:
+                continue
+            subtotal += price_row.price * item.quantity
+        return str(subtotal)
+
+
+class CartItemUpsertSerializer(serializers.Serializer):
+    """Valida altas de items en el carrito actual."""
+
+    product_id = serializers.IntegerField()
+    quantity = serializers.IntegerField(min_value=1, default=1)
+    store_id = serializers.IntegerField(required=False, allow_null=True)
+
+    def validate(self, attrs):
+        product = (
+            Product.objects.select_related('category')
+            .prefetch_related('prices__store')
+            .filter(id=attrs['product_id'])
+            .first()
+        )
+        if product is None:
+            raise serializers.ValidationError({'product_id': 'Producto no encontrado.'})
+
+        store_id = attrs.get('store_id')
+        price_row = get_product_price_row(product, store_id)
+        if store_id is not None and price_row is None:
+            raise serializers.ValidationError({'store_id': 'La tienda no tiene precio registrado para este producto.'})
+
+        attrs['product'] = product
+        attrs['resolved_store'] = price_row.store if price_row is not None else None
+        return attrs
+
+
+class CartItemUpdateSerializer(serializers.Serializer):
+    """Valida cambios parciales de una linea existente del carrito."""
+
+    quantity = serializers.IntegerField(required=False, min_value=1)
+    store_id = serializers.IntegerField(required=False, allow_null=True)
+
+    def validate(self, attrs):
+        if not attrs:
+            raise serializers.ValidationError('Debes enviar quantity o store_id.')
+
+        item = self.context['item']
+        if 'store_id' in attrs:
+            price_row = get_product_price_row(item.product, attrs['store_id'])
+            if attrs['store_id'] is not None and price_row is None:
+                raise serializers.ValidationError({'store_id': 'La tienda no tiene precio registrado para este producto.'})
+            attrs['resolved_store'] = price_row.store if price_row is not None else None
+
+        return attrs
 
 
 class RaffleSerializer(serializers.ModelSerializer):

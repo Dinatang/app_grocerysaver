@@ -7,6 +7,7 @@ Backend API para GrocerySaver construido con Django, Django REST Framework, JWT 
 - Autenticacion con JWT
 - Registro, login, verificacion de correo y social login
 - Catalogo de tiendas, categorias, productos, ofertas y comparacion de precios
+- Carrito persistido por usuario autenticado
 - Escaneo de productos por codigo
 - Clima con Open-Meteo
 - Catalogo geografico de Ecuador
@@ -179,6 +180,15 @@ media/job_exports/
 - `GET /api/offers/`
 - `GET /api/compare-prices/`
 
+### Carrito
+
+- `GET /api/cart/`
+- `DELETE /api/cart/`
+- `GET /api/cart/items/`
+- `POST /api/cart/items/`
+- `PATCH /api/cart/items/<item_id>/`
+- `DELETE /api/cart/items/<item_id>/`
+
 ### Geo y clima
 
 - `GET /api/weather/`
@@ -225,4 +235,3 @@ Para celular fisico usa la IP local de tu PC.
 - `grocerysaver/cache_utils.py`
 - `grocerysaver/dataloaders.py`
 - `grocerysaver/job_queue.py`
-

@@ -1,0 +1,25 @@
+{% extends "admin/base.html" %}
+{% load static %}
+
+{% block extrastyle %}
+{{ block.super }}
+<link rel="stylesheet" href="{% static 'grocerysaver/admin/dashboard.css' %}">
+{% endblock %}
+
+{% block title %}{% if subtitle %}{{ subtitle }} | {% endif %}{{ title }} | GrocerySaver Admin{% endblock %}
+
+{% block branding %}
+<div class="grocery-branding">
+    <div class="grocery-branding__mark">GS</div>
+    <div class="grocery-branding__copy">
+        <h1 id="site-name"><a href="{% url 'admin:index' %}">GrocerySaver Control Center</a></h1>
+        <p>Catalogo, ofertas, usuarios y carritos en una sola vista.</p>
+    </div>
+</div>
+{% endblock %}
+
+{% block nav-global %}
+<div class="grocery-nav-actions">
+    <a href="/api/" class="grocery-nav-link">API</a>
+</div>
+{% endblock %}

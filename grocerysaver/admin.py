@@ -16,6 +16,8 @@ from django.utils.html import format_html
 
 from .models import (
     Address,
+    Cart,
+    CartItem,
     Category,
     EmailVerificationToken,
     NotificationPreference,
@@ -32,6 +34,10 @@ from .models import (
 )
 
 User = get_user_model()
+
+admin.site.site_header = 'GrocerySaver Control Center'
+admin.site.site_title = 'GrocerySaver Admin'
+admin.site.index_title = 'Panel ejecutivo'
 
 
 try:
@@ -404,6 +410,39 @@ class NotificationPreferenceAdmin(admin.ModelAdmin):
 
     list_display = ('user', 'push_enabled', 'email_enabled', 'sms_enabled', 'updated_at')
     search_fields = ('user__email', 'user__username')
+
+
+class CartItemInline(admin.TabularInline):
+    """Inline para revisar las lineas de un carrito."""
+
+    model = CartItem
+    extra = 0
+    autocomplete_fields = ('product', 'store')
+    fields = ('product', 'store', 'quantity', 'created_at', 'updated_at')
+    readonly_fields = ('created_at', 'updated_at')
+
+
+@admin.register(Cart)
+class CartAdmin(admin.ModelAdmin):
+    """Admin del carrito persistido por usuario."""
+
+    list_display = ('user', 'items_count', 'created_at', 'updated_at')
+    search_fields = ('user__email', 'user__username')
+    inlines = (CartItemInline,)
+
+    @admin.display(description='Items')
+    def items_count(self, obj):
+        return obj.items.count()
+
+
+@admin.register(CartItem)
+class CartItemAdmin(admin.ModelAdmin):
+    """Admin de lineas individuales del carrito."""
+
+    list_display = ('cart', 'product', 'store', 'quantity', 'updated_at')
+    list_filter = ('store', 'product__category')
+    search_fields = ('cart__user__email', 'cart__user__username', 'product__name', 'product__brand')
+    autocomplete_fields = ('cart', 'product', 'store')
 
 
 @admin.register(Raffle)

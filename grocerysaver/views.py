@@ -2,6 +2,7 @@
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.db.models import Prefetch
 from django.utils import timezone
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
@@ -32,6 +33,8 @@ from .job_queue import enqueue_export_products_job
 from .models import (
     Address,
     BackgroundJob,
+    Cart,
+    CartItem,
     Category,
     EmailVerificationToken,
     JobStatus,
@@ -50,6 +53,10 @@ from .models import (
 from .serializers import (
     AddressSerializer,
     BackgroundJobSerializer,
+    CartItemSerializer,
+    CartItemUpsertSerializer,
+    CartItemUpdateSerializer,
+    CartSerializer,
     CategorySerializer,
     LoginSerializer,
     LogoutSerializer,
@@ -110,6 +117,34 @@ def build_user_response(user):
         'address': profile.address if profile else None,
         'birth_date': str(profile.birth_date) if profile and profile.birth_date else None,
     }
+
+
+def load_user_cart(user):
+    """Carga el carrito del usuario con sus relaciones ya resueltas."""
+    return (
+        Cart.objects.select_related('user')
+        .prefetch_related(
+            Prefetch(
+                'items',
+                queryset=CartItem.objects.select_related('product__category', 'store').prefetch_related(
+                    'product__codes',
+                    'product__prices__store',
+                ),
+            )
+        )
+        .get(user=user)
+    )
+
+
+def get_or_create_user_cart(user):
+    """Obtiene o crea el carrito actual del usuario autenticado."""
+    Cart.objects.get_or_create(user=user)
+    return load_user_cart(user)
+
+
+def touch_cart(cart):
+    """Actualiza la marca temporal del carrito tras una mutacion."""
+    cart.save(update_fields=['updated_at'])
 
 
 class IsAdminRole(permissions.BasePermission):
@@ -298,6 +333,39 @@ class ApiRootView(APIView):
                         'auth_required': True,
                     },
                     {
+                        'path': '/api/cart/',
+                        'method': 'GET',
+                        'auth_required': True,
+                    },
+                    {
+                        'path': '/api/cart/',
+                        'method': 'DELETE',
+                        'auth_required': True,
+                        'description': 'Vaciar carrito actual.',
+                    },
+                    {
+                        'path': '/api/cart/items/',
+                        'method': 'GET',
+                        'auth_required': True,
+                    },
+                    {
+                        'path': '/api/cart/items/',
+                        'method': 'POST',
+                        'auth_required': True,
+                        'body': ['product_id', 'quantity?', 'store_id?'],
+                    },
+                    {
+                        'path': '/api/cart/items/<item_id>/',
+                        'method': 'PATCH',
+                        'auth_required': True,
+                        'body': ['quantity?', 'store_id?'],
+                    },
+                    {
+                        'path': '/api/cart/items/<item_id>/',
+                        'method': 'DELETE',
+                        'auth_required': True,
+                    },
+                    {
                         'path': '/api/profile/addresses/',
                         'method': 'POST',
                         'auth_required': True,
@@ -369,6 +437,117 @@ class StoreListView(APIView):
             ttl=CATALOG_CACHE_TTL,
         )
         return cache_aware_response(payload, cache_hit)
+
+
+class CartView(APIView):
+    """Lee o vacia el carrito persistido del usuario autenticado."""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        cart = get_or_create_user_cart(request.user)
+        return Response({'cart': CartSerializer(cart, context={'request': request}).data})
+
+    def delete(self, request):
+        cart = get_or_create_user_cart(request.user)
+        cart.items.all().delete()
+        touch_cart(cart)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class CartItemListCreateView(APIView):
+    """Lista items del carrito o agrega una nueva linea."""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        cart = get_or_create_user_cart(request.user)
+        items = list(cart.items.all())
+        return Response({'items': CartItemSerializer(items, many=True, context={'request': request}).data})
+
+    def post(self, request):
+        serializer = CartItemUpsertSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        cart = get_or_create_user_cart(request.user)
+        product = serializer.validated_data['product']
+        quantity = serializer.validated_data['quantity']
+        resolved_store = serializer.validated_data['resolved_store']
+
+        item = cart.items.filter(product=product).first()
+        created = item is None
+
+        if created:
+            item = CartItem.objects.create(
+                cart=cart,
+                product=product,
+                store=resolved_store,
+                quantity=quantity,
+            )
+        else:
+            item.quantity += quantity
+            item.store = resolved_store
+            item.save(update_fields=['quantity', 'store', 'updated_at'])
+
+        touch_cart(cart)
+        cart = load_user_cart(request.user)
+        item = cart.items.get(id=item.id)
+
+        return Response(
+            {
+                'item': CartItemSerializer(item, context={'request': request}).data,
+                'cart': CartSerializer(cart, context={'request': request}).data,
+            },
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+
+
+class CartItemDetailView(APIView):
+    """Actualiza o elimina una linea individual del carrito."""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def _get_item(self, request, item_id):
+        return (
+            CartItem.objects.select_related('cart', 'product__category', 'store')
+            .prefetch_related('product__codes', 'product__prices__store')
+            .filter(id=item_id, cart__user=request.user)
+            .first()
+        )
+
+    def patch(self, request, item_id):
+        item = self._get_item(request, item_id)
+        if item is None:
+            return Response({'detail': 'Item de carrito no encontrado.'}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = CartItemUpdateSerializer(item, data=request.data, partial=True, context={'item': item})
+        serializer.is_valid(raise_exception=True)
+
+        if 'quantity' in serializer.validated_data:
+            item.quantity = serializer.validated_data['quantity']
+        if 'resolved_store' in serializer.validated_data:
+            item.store = serializer.validated_data['resolved_store']
+        item.save(update_fields=['quantity', 'store', 'updated_at'])
+
+        touch_cart(item.cart)
+        cart = load_user_cart(request.user)
+        item = cart.items.get(id=item.id)
+        return Response(
+            {
+                'item': CartItemSerializer(item, context={'request': request}).data,
+                'cart': CartSerializer(cart, context={'request': request}).data,
+            }
+        )
+
+    def delete(self, request, item_id):
+        item = self._get_item(request, item_id)
+        if item is None:
+            return Response({'detail': 'Item de carrito no encontrado.'}, status=status.HTTP_404_NOT_FOUND)
+
+        cart = item.cart
+        item.delete()
+        touch_cart(cart)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class AddressListCreateView(APIView):
