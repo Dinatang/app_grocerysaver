@@ -13,7 +13,9 @@ Backend API para GrocerySaver construido con Django, Django REST Framework, JWT 
 - Catalogo geografico de Ecuador
 - Cache para consultas repetitivas
 - Prevencion de N+1 con batching/caching por request
-- Cola de trabajos para exportacion de productos a CSV
+- Cola de trabajos para exportacion de productos en TXT, CSV y PDF
+- Lecturas de sensores del dispositivo
+- Avatar de perfil con subida de imagen
 
 ## Stack
 
@@ -111,7 +113,7 @@ Archivos relacionados:
 
 ## Job Queue
 
-Se implemento una cola de trabajos basada en base de datos para exportar productos a CSV.
+Se implemento una cola de trabajos basada en base de datos para exportar productos en TXT, CSV o PDF.
 
 ### Endpoints
 
@@ -127,6 +129,7 @@ Body opcional:
 
 ```json
 {
+  "format": "pdf",
   "category_id": 1,
   "search": "leche"
 }
@@ -153,7 +156,7 @@ Procesar solo un job:
 .\venv\Scripts\python.exe manage.py run_job_worker --once
 ```
 
-Los archivos CSV generados se guardan en:
+Los archivos generados se guardan en:
 
 ```text
 media/job_exports/
@@ -169,6 +172,8 @@ media/job_exports/
 - `POST /api/auth/login/`
 - `POST /api/auth/logout/`
 - `GET /api/auth/me/`
+- `PATCH /api/auth/me/avatar/`
+- `DELETE /api/auth/me/avatar/`
 - `POST /api/auth/social-login/`
 
 ### Catalogo
@@ -179,6 +184,10 @@ media/job_exports/
 - `POST /api/products/scan/`
 - `GET /api/offers/`
 - `GET /api/compare-prices/`
+
+### Device Sensors
+
+- `POST /api/device-sensors/`
 
 ### Carrito
 
